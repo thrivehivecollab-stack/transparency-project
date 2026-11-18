@@ -1,0 +1,36 @@
+:root{--ink:#16202b;--muted:#5b6673;--line:#dfe3e8;--bg:#fbfaf7;--card:#fff;--accent:#1f5f8b;--good:#1e7a46;--bad:#b3261e;--warn:#9a6700}
+*{box-sizing:border-box}
+body{margin:0;font:17px/1.6 Georgia,"Iowan Old Style",serif;color:var(--ink);background:var(--bg)}
+header{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--line);background:#fff;font-family:system-ui,sans-serif}
+.brand{font-weight:700;color:var(--ink);text-decoration:none;font-size:1.1rem}
+nav a{margin-right:1rem;color:var(--muted);text-decoration:none;font-size:.95rem}
+nav a:hover{color:var(--accent)}
+main{max-width:760px;margin:0 auto;padding:1.5rem 1.25rem 3rem}
+h1{font-size:1.8rem;line-height:1.25;margin:.5rem 0 1rem}
+h2{font-family:system-ui,sans-serif;font-size:1.05rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:2rem}
+a{color:var(--accent)}
+.intro p{color:var(--muted)}
+.button,button{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:.6rem 1rem;font:600 .95rem system-ui,sans-serif;text-decoration:none;cursor:pointer}
+button.secondary{background:#e9edf1;color:var(--ink)}
+button.danger{background:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.chips{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
+.chip{border:1px solid var(--line);border-radius:999px;padding:.25rem .75rem;font:.85rem system-ui,sans-serif;text-decoration:none;background:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:1rem 1.1rem;margin:1rem 0}
+.meta{font:.85rem system-ui,sans-serif;color:var(--muted);margin:0}
+.statement{font-size:1.1rem;margin:.4rem 0}
+.statement a{color:var(--ink);text-decoration:none}
+.statement a:hover{text-decoration:underline}
+h1.statement{font-size:1.5rem}
+.sources{font:.9rem system-ui,sans-serif;padding-left:1.1rem;margin:.4rem 0 0}
+.method{font-size:.95rem;color:var(--muted);border-left:3px solid var(--line);padding-left:.8rem}
+table.details{border-collapse:collapse;width:100%;font:.85rem system-ui,sans-serif}
+.details th,.details td{border-bottom:1px solid var(--line);padding:.4rem;text-align:left;vertical-align:top}
+.details th{color:var(--muted);width:35%;text-transform:capitalize}
+footer{border-top:1px solid var(--line);padding:1rem 1.25rem;font:.8rem system-ui,sans-serif;color:var(--muted);text-align:center}
+.poll{background:#fff;border:1px solid var(--line);border-radius:8px;padding:1rem;margin:1rem 0}
+.opt{display:block;width:100%;text-align:left;margin:.4rem 0;background:#f2f5f8;color:var(--ink)}
+.bar{height:8px;background:var(--accent);border-radius:4px;margin:.2rem 0 .6rem}
+textarea,input[type=email],input[type=text]{width:100%;font:16px system-ui,sans-serif;padding:.6rem;border:1px solid var(--line);border-radius:6px}
+.note{font:.85rem system-ui,sans-serif;color:var(--muted)}
+.ok{color:var(--good)}.no{color:var(--bad)}.warn{color:var(--warn)}

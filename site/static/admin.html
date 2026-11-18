@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Review queue</title>
+<link rel="stylesheet" href="style.css">
+<style>
+.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:1rem 0}
+.tabs button{background:#e9edf1;color:var(--ink)}
+.tabs button.on{background:var(--accent);color:#fff}
+.checks span{margin-right:.8rem}
+.ticks label{display:block;font:.9rem system-ui,sans-serif;margin:.3rem 0}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}
+details{font:.85rem system-ui,sans-serif;margin:.5rem 0}
+pre{white-space:pre-wrap;word-break:break-word;background:#f5f7f9;padding:.5rem;border-radius:6px}
+</style>
+</head><body>
+<header><span class="brand">Review queue</span><nav><a href="index.html">Public site</a><a href="#" id="logout" hidden>Log out</a></nav></header>
+<main>
+<section id="login">
+  <h1>Sign in</h1>
+  <p class="note">Enter your reviewer email. You'll get a sign-in link.</p>
+  <form id="login-form"><input type="email" id="email" required placeholder="you@example.com"><p><button>Send sign-in link</button> <span id="login-msg" class="note"></span></p></form>
+</section>
+<section id="app" hidden>
+  <div class="tabs">
+    <button data-tab="queue" class="on">Queue <span id="n-queue"></span></button>
+    <button data-tab="published">Published</button>
+    <button data-tab="suggestions">Suggestions <span id="n-sugg"></span></button>
+    <button data-tab="polls">Polls</button>
+  </div>
+  <div id="view"></div>
+</section>
+</main>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+var sb = supabase.createClient(TP.url, TP.key);
+var me = null, tab = "queue";
+function esc(s) { var d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; }
+function $(id) { return document.getElementById(id); }
+function badge(ok, yes, no) { return ok ? "<span class='ok'>✔ " + yes + "</span>" : "<span class='no'>✘ " + no + "</span>"; }
+function sources(list) {
+  return "<ul class='sources'>" + (list || []).map(function (s) {
+    return "<li><a target='_blank' rel='noopener' href='" + esc(s.url) + "'>" + esc(s.label || s.url) + "</a>" +
+      (s.archive_url ? " · <a target='_blank' rel='noopener' href='" + esc(s.archive_url) + "'>archived copy</a>" : " · <span class='warn'>no archive yet</span>") + "</li>";
+  }).join("") + "</ul>";
+}
+
+$("login-form").onsubmit = function (e) {
+  e.preventDefault();
+  sb.auth.signInWithOtp({ email: $("email").value, options: { emailRedirectTo: location.href.split("#")[0], shouldCreateUser: true } })
+    .then(function (r) { $("login-msg").textContent = r.error ? r.error.message : "Check your email for the link."; });
+};
+$("logout").onclick = function (e) { e.preventDefault(); sb.auth.signOut().then(function () { location.reload(); }); };
+document.querySelectorAll(".tabs button").forEach(function (b) {
+  b.onclick = function () { document.querySelectorAll(".tabs button").forEach(function (x) { x.classList.remove("on"); }); b.classList.add("on"); tab = b.dataset.tab; render(); };
+});
+
+sb.auth.onAuthStateChange(function (_evt, session) {
+  me = session && session.user;
+  $("login").hidden = !!me; $("app").hidden = !me; $("logout").hidden = !me;
+  if (me) render();
+});
+
+function counts() {
+  sb.from("items").select("id", { count: "exact", head: true }).in("status", ["pending", "needs_more"]).then(function (r) { $("n-queue").textContent = r.count != null ? "(" + r.count + ")" : ""; });
+  sb.from("suggestions").select("id", { count: "exact", head: true }).eq("status", "pending").then(function (r) { $("n-sugg").textContent = r.count ? "(" + r.count + ")" : ""; });
+}
+
+function render() {
+  counts();
+  var v = $("view"); v.innerHTML = "<p class='note'>Loading…</p>";
+  if (tab === "queue") return queue(v);
+  if (tab === "published") return published(v);
+  if (tab === "suggestions") return suggestions(v);
+  if (tab === "polls") return polls(v);
+}
+
+function queue(v) {
+  sb.from("items").select("*").in("status", ["pending", "needs_more"]).order("priority", { ascending: false }).order("pulled_at", { ascending: false }).limit(25)
+  .then(function (r) {
+    if (r.error) { v.innerHTML = "<p class='no'>" + esc(r.error.message) + ". If this says permission denied, your email isn't on the reviewer list yet.</p>"; return; }
+    if (!r.data.length) { v.innerHTML = "<p>Queue is empty. Nice work.</p>"; return; }
+    v.innerHTML = "<p class='note'>Highest priority first. Open the source, confirm every name, number and date, then approve. Edits to the sentence are saved when you approve.</p>";
+    r.data.forEach(function (it) {
+      var c = it.checks || {}, el = document.createElement("article"); el.className = "card";
+      el.innerHTML =
+        "<p class='meta'>" + esc(it.tracker) + " · priority " + it.priority + " · pulled " + esc((it.pulled_at || "").slice(0, 10)) + (it.status === "needs_more" ? " · <span class='warn'>needs more: " + esc(it.review_note) + "</span>" : "") + "</p>" +
+        "<textarea rows='4' class='stmt'>" + esc(it.statement) + "</textarea>" +
+        sources(it.sources) +
+        "<p class='checks note'>" + badge(c.source_live, "source page loads", "source page didn't load") + badge(c.archived, "archived", "not archived yet") + "<span>checked " + esc((c.checked_at || "").slice(0, 16).replace("T", " ")) + "</span></p>" +
+        "<details><summary>Raw record</summary><pre>" + esc(JSON.stringify(it.data, null, 2)) + "</pre></details>" +
+        "<div class='ticks'><label><input type='checkbox'> I opened the original source</label>" +
+        "<label><input type='checkbox'> Every name, amount and date matches the source</label>" +
+        "<label><input type='checkbox'> No private person's personal details, no claims beyond what the record shows</label></div>" +
+        "<input type='text' class='notefield' placeholder='Note (required for Needs more or Reject)'>" +
+        "<div class='row'><button class='ap' disabled>Approve and publish</button><button class='secondary nm'>Needs more</button><button class='danger rj'>Reject</button></div>";
+      var ticks = el.querySelectorAll(".ticks input"), ap = el.querySelector(".ap");
+      ticks.forEach(function (t) { t.onchange = function () { ap.disabled = !Array.prototype.every.call(ticks, function (x) { return x.checked; }); }; });
+      function done(status, needNote) {
+        var note = el.querySelector(".notefield").value.trim();
+        if (needNote && note.length < 3) { el.querySelector(".notefield").focus(); return; }
+        var now = new Date().toISOString(), patch = { status: status, reviewed_at: now, reviewed_by: me.email, review_note: note || null };
+        if (status === "approved") { patch.statement = el.querySelector(".stmt").value.trim(); patch.published_at = now; }
+        sb.from("items").update(patch).eq("id", it.id).then(function (res) {
+          if (res.error) { alert(res.error.message); return; }
+          el.innerHTML = "<p class='note'>" + (status === "approved" ? "Approved. It goes live on the next site update (within about 30 minutes)." : "Marked " + status.replace("_", " ") + ".") + "</p>";
+          counts();
+        });
+      }
+      ap.onclick = function () { done("approved", false); };
+      el.querySelector(".nm").onclick = function () { done("needs_more", true); };
+      el.querySelector(".rj").onclick = function () { done("rejected", true); };
+      v.appendChild(el);
+    });
+  });
+}
+
+function published(v) {
+  sb.from("items").select("id,tracker,statement,sources,published_at").eq("status", "approved").order("published_at", { ascending: false }).limit(50).then(function (r) {
+    if (r.error) { v.innerHTML = "<p class='no'>" + esc(r.error.message) + "</p>"; return; }
+    v.innerHTML = "<p class='note'>Corrections and unpublishing are logged publicly with your reason.</p>";
+    r.data.forEach(function (it) {
+      var el = document.createElement("article"); el.className = "card";
+      el.innerHTML = "<p class='meta'>#" + it.id + " · " + esc(it.tracker) + " · published " + esc((it.published_at || "").slice(0, 10)) + "</p>" +
+        "<textarea rows='3' class='stmt'>" + esc(it.statement) + "</textarea>" + sources(it.sources) +
+        "<input type='text' class='reason' placeholder='Public reason for the change (required)'>" +
+        "<div class='row'><button class='fix'>Save correction</button><button class='danger un'>Unpublish</button></div>";
+      el.querySelector(".fix").onclick = function () {
+        var reason = el.querySelector(".reason").value.trim(); if (reason.length < 5) { el.querySelector(".reason").focus(); return; }
+        sb.rpc("correct_item", { p_item: it.id, p_statement: el.querySelector(".stmt").value.trim(), p_reason: reason })
+          .then(function (res) { el.insertAdjacentHTML("beforeend", res.error ? "<p class='no'>" + esc(res.error.message) + "</p>" : "<p class='ok'>Correction saved and logged.</p>"); });
+      };
+      el.querySelector(".un").onclick = function () {
+        var reason = el.querySelector(".reason").value.trim(); if (reason.length < 5) { el.querySelector(".reason").focus(); return; }
+        sb.from("corrections").insert({ item_id: it.id, changed_by: me.email, reason: "Removed: " + reason, before: it.statement, after: null })
+          .then(function (res) { if (res.error) { alert(res.error.message); return; }
+            return sb.from("items").update({ status: "needs_more", review_note: "Unpublished: " + reason }).eq("id", it.id); })
+          .then(function () { el.innerHTML = "<p class='note'>Unpublished and logged. It's back in the queue.</p>"; });
+      };
+      v.appendChild(el);
+    });
+  });
+}
+
+function suggestions(v) {
+  sb.from("suggestions").select("id,body,status,created_at").eq("status", "pending").order("created_at").limit(50).then(function (r) {
+    if (r.error) { v.innerHTML = "<p class='no'>" + esc(r.error.message) + "</p>"; return; }
+    if (!r.data.length) { v.innerHTML = "<p>No new suggestions.</p>"; return; }
+    v.innerHTML = "<p class='note'>Approved suggestions appear publicly on the polls page. Reject anything with personal details about private people.</p>";
+    r.data.forEach(function (s) {
+      var el = document.createElement("article"); el.className = "card";
+      el.innerHTML = "<p>" + esc(s.body) + "</p><p class='meta'>" + esc(s.created_at.slice(0, 10)) + "</p><div class='row'><button class='a'>Approve</button><button class='danger r'>Reject</button></div>";
+      function set(st) { sb.from("suggestions").update({ status: st }).eq("id", s.id).then(function () { el.innerHTML = "<p class='note'>" + st + "</p>"; counts(); }); }
+      el.querySelector(".a").onclick = function () { set("approved"); };
+      el.querySelector(".r").onclick = function () { set("rejected"); };
+      v.appendChild(el);
+    });
+  });
+}
+
+function polls(v) {
+  sb.from("polls").select("id,question,is_open,poll_options(id,label)").order("created_at", { ascending: false }).then(function (r) {
+    if (r.error) { v.innerHTML = "<p class='no'>" + esc(r.error.message) + "</p>"; return; }
+    v.innerHTML = "<article class='card'><h3>New poll</h3><input type='text' id='q' placeholder='Question'><textarea id='opts' rows='5' placeholder='One option per line'></textarea><div class='row'><button id='mk'>Create poll</button></div></article>";
+    r.data.forEach(function (p) {
+      var el = document.createElement("article"); el.className = "card";
+      el.innerHTML = "<p><strong>" + esc(p.question) + "</strong> " + (p.is_open ? "<span class='ok'>open</span>" : "<span class='note'>closed</span>") + "</p><div class='res note'></div><div class='row'><button class='secondary t'>" + (p.is_open ? "Close poll" : "Reopen poll") + "</button></div>";
+      sb.rpc("poll_results", { p_poll: p.id }).then(function (res) { el.querySelector(".res").innerHTML = (res.data || []).map(function (o) { return esc(o.label) + ": " + o.votes; }).join("<br>"); });
+      el.querySelector(".t").onclick = function () { sb.from("polls").update({ is_open: !p.is_open }).eq("id", p.id).then(render); };
+      v.appendChild(el);
+    });
+    $("mk").onclick = function () {
+      var q = $("q").value.trim(), opts = $("opts").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+      if (!q || opts.length < 2) return;
+      sb.from("polls").insert({ question: q }).select().single().then(function (res) {
+        if (res.error) { alert(res.error.message); return; }
+        return sb.from("poll_options").insert(opts.map(function (o, i) { return { poll_id: res.data.id, label: o, position: i }; }));
+      }).then(render);
+    };
+  });
+}
+</script>
+</body></html>

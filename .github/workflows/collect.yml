@@ -1,0 +1,51 @@
+name: Collect public records
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 hours
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run collectors
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+        working-directory: collectors
+        run: |
+          failed=""
+          for c in house_trades fec_influencer usaspending_persuasion archive_backlog; do
+            echo "::group::$c"
+            python "$c.py" || failed="$failed $c"
+            echo "::endgroup::"
+          done
+          echo "FAILED=$failed" >> "$GITHUB_ENV"
+      - name: Record run (public log, also keeps the schedule active)
+        run: |
+          mkdir -p status
+          printf '{"last_run":"%s","failed":"%s"}\n' "$(date -u +%FT%TZ)" "${FAILED# }" > status/last_run.json
+          git config user.name "transparency-bot"
+          git config user.email "transparency-bot@users.noreply.github.com"
+          git add status/last_run.json
+          git commit -m "Collector run $(date -u +%F)" || true
+          git push || true
+      - name: Flag failures
+        if: env.FAILED != ''
+        run: |
+          echo "::error::These collectors failed:$FAILED. A source may have changed format."
+          exit 1

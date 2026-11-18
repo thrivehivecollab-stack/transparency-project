@@ -1,0 +1,7 @@
+{
+  "_note": "Public settings. The anon key is designed to be public; database rules decide what it can read. The service key is NEVER stored here; it lives in GitHub secrets.",
+  "site_name": "Transparency Project",
+  "site_url": "https://thrivehivecollab-stack.github.io/transparency-project",
+  "supabase_url": "",
+  "supabase_anon_key": ""
+}

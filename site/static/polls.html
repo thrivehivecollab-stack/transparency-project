@@ -1,0 +1,76 @@
+<h1>What should we track next?</h1>
+<p class="note">Reader polls are unscientific: one vote per device, and results only reflect people who chose to vote here.</p>
+<div id="polls"><p class="note">Loading polls…</p></div>
+
+<h2>Suggest something to track</h2>
+<p class="note">Suggestions are read by a person before they appear publicly. Please describe what you want tracked, not individuals' personal information.</p>
+<form id="suggest">
+  <textarea id="body" rows="3" maxlength="500" placeholder="Example: track which members of Congress own stock in defense contractors"></textarea>
+  <p><button type="submit">Send suggestion</button> <span id="suggest-msg" class="note"></span></p>
+</form>
+
+<h2>Approved suggestions</h2>
+<ul id="approved"><li class="note">Loading…</li></ul>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  var H = { apikey: TP.key, Authorization: "Bearer " + TP.key, "Content-Type": "application/json" };
+  function api(path, opts) { return fetch(TP.url + "/rest/v1/" + path, Object.assign({ headers: H }, opts || {})).then(function (r) {
+    if (!r.ok) return r.json().then(function (j) { throw new Error(j.message || r.statusText); });
+    return r.status === 204 ? null : r.json(); }); }
+  function rpc(name, args) { return api("rpc/" + name, { method: "POST", body: JSON.stringify(args) }); }
+  function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+  var device = null;
+  try { device = localStorage.getItem("tp_device"); } catch (e) {}
+  if (!device) {
+    device = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()) + "-tp";
+    try { localStorage.setItem("tp_device", device); } catch (e) {}
+  }
+  function voted(id, v) { try { if (v) localStorage.setItem("tp_voted_" + id, "1"); return localStorage.getItem("tp_voted_" + id); } catch (e) { return null; } }
+
+  function showResults(el, rows) {
+    var sum = rows.reduce(function (a, r) { return a + Number(r.votes); }, 0), total = sum || 1;
+    el.querySelector(".body").innerHTML = rows.map(function (r) {
+      var pct = Math.round(100 * Number(r.votes) / total);
+      return "<div>" + esc(r.label) + " <span class='note'>" + pct + "% (" + r.votes + ")</span></div><div class='bar' style='width:" + pct + "%'></div>";
+    }).join("") + "<p class='note'>" + sum + " votes so far</p>";
+  }
+
+  api("polls?is_open=eq.true&select=id,question,poll_options(id,label,position)&order=created_at.desc").then(function (polls) {
+    var box = document.getElementById("polls");
+    if (!polls.length) { box.innerHTML = "<p class='note'>No open polls right now.</p>"; return; }
+    box.innerHTML = "";
+    polls.forEach(function (p) {
+      var el = document.createElement("div"); el.className = "poll";
+      el.innerHTML = "<h3>" + esc(p.question) + "</h3><div class='body'></div>";
+      box.appendChild(el);
+      if (voted(p.id)) { rpc("poll_results", { p_poll: p.id }).then(function (r) { showResults(el, r); }); return; }
+      p.poll_options.sort(function (a, b) { return a.position - b.position; }).forEach(function (o) {
+        var b = document.createElement("button"); b.className = "opt"; b.textContent = o.label;
+        b.onclick = function () {
+          el.querySelectorAll("button").forEach(function (x) { x.disabled = true; });
+          rpc("cast_vote", { p_poll: p.id, p_option: o.id, p_device: device })
+            .then(function (r) { voted(p.id, true); showResults(el, r); })
+            .catch(function (err) { el.querySelector(".body").insertAdjacentHTML("beforeend", "<p class='no'>" + esc(err.message) + "</p>"); });
+        };
+        el.querySelector(".body").appendChild(b);
+      });
+    });
+  }).catch(function () { document.getElementById("polls").innerHTML = "<p class='no'>Polls couldn't load. Try again shortly.</p>"; });
+
+  api("suggestions?status=eq.approved&select=body,created_at&order=created_at.desc&limit=50").then(function (rows) {
+    document.getElementById("approved").innerHTML = rows.length ? rows.map(function (r) { return "<li>" + esc(r.body) + "</li>"; }).join("") : "<li class='note'>None yet.</li>";
+  }).catch(function () {});
+
+  document.getElementById("suggest").onsubmit = function (ev) {
+    ev.preventDefault();
+    var body = document.getElementById("body").value.trim(), msg = document.getElementById("suggest-msg");
+    if (body.length < 5) { msg.textContent = "Please write a bit more."; return; }
+    rpc("suggest", { p_body: body, p_device: device }).then(function () {
+      msg.textContent = "Thanks, it's in the review queue."; document.getElementById("body").value = "";
+    }).catch(function (err) { msg.textContent = err.message === "limit reached" ? "Limit is 3 suggestions a day." : "Couldn't send. Try again later."; });
+  };
+})();
+</script>
