@@ -250,7 +250,9 @@ def check_fara(name):
               "foreign_principals": "Foreign principals (who the agents work for)"}
     regs = set()
     for kind, label in labels.items():
-        hits = [{k: v for k, v in row.items() if k} for row in fara_rows(kind)
+        # Street addresses and phone numbers are dropped: an individual agent's filing can carry a home address.
+        hits = [{k: v for k, v in row.items() if k and not re.search(r"address|zip|phone", k, re.I)}
+                for row in fara_rows(kind)
                 if name_matches(" ".join(str(v) for k, v in row.items() if k and v), toks)]
         if hits:
             result[label] = hits[:25]
