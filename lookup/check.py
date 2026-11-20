@@ -150,11 +150,15 @@ def check_link_in_bio(handle):
 
 def check_youtube(handle):
     r = get(f"https://www.youtube.com/@{handle}")
-    if not r or r.status_code != 200:
+    if r is None:
+        return None
+    if r.status_code == 404:
+        return {"channel": None, "channel_links": [], "videos": []}
+    if r.status_code != 200:
         return None
     m = re.search(r'"(?:channelId|externalId)":"(UC[\w-]{22})"', r.text)
     if not m:
-        return None
+        return {"channel": None, "channel_links": [], "videos": []}
     cid = m.group(1)
     about_links = []
     for l in extract_links(r.text.replace("\\u0026", "&"), ["youtube.com", "youtu.be", "ytimg", "ggpht",
@@ -220,6 +224,69 @@ def check_threadreader(handle, max_threads=25):
                         "links_found": len(links), "flagged_links": flagged,
                         "discloses_sponsor": bool(SPONSOR_WORDS.search(text))})
     return threads
+
+
+def check_archived_posts(handle, limit=150):
+    """Read archived copies of X posts from the Wayback Machine and trace the links inside them.
+    This is the Midas tracked-link method applied to posts we can read without logging in to X."""
+    import html as htmlmod
+    import time
+    caps = []
+    for dom in ("x.com", "twitter.com"):
+        r = get("https://web.archive.org/cdx/search/cdx",
+                params={"url": f"{dom}/{handle}/status/*", "output": "json", "fl": "original,timestamp",
+                        "filter": "statuscode:200", "collapse": "urlkey", "limit": "3000"})
+        if r is None or r.status_code != 200:
+            continue
+        try:
+            caps += r.json()[1:]
+        except ValueError:
+            pass
+    seen, uniq = set(), []
+    for orig, ts in sorted(caps, key=lambda x: x[1], reverse=True):
+        m = re.search(r"/status/(\d+)", orig)
+        if m and m.group(1) not in seen and handle.lower() in orig.lower():
+            seen.add(m.group(1))
+            uniq.append((m.group(1), orig, ts))
+    posts, readable = [], 0
+    link_cache = {}
+    for pid, orig, ts in uniq[:limit]:
+        time.sleep(1.2)
+        a = get(f"https://web.archive.org/web/{ts}id_/{orig}")
+        if not a or a.status_code != 200:
+            continue
+        page = a.text
+        texts = re.findall(r'<meta[^>]+(?:property|name)="(?:og:description|twitter:description)"[^>]+content="([^"]*)"', page)
+        texts += re.findall(r'content="([^"]*)"[^>]+(?:property|name)="(?:og:description|twitter:description)"', page)
+        body = re.findall(r'data-testid="tweetText"[^>]*>(.*?)</div>', page, re.S)
+        text = htmlmod.unescape(" ".join(texts + [re.sub(r"<[^>]+>", " ", b) for b in body])).strip()
+        if not text:
+            continue
+        readable += 1
+        links = sorted(set(re.findall(r"https?://t\.co/\w+", page)) |
+                       set(l for l in extract_links(text, ["x.com", "twitter.com", "twimg"])))[:8]
+        flagged = []
+        for l in links:
+            if l not in link_cache:
+                hops = trace(l)
+                link_cache[l] = (hops[-1], flag_link(hops))
+            final, f = link_cache[l]
+            if f:
+                flagged.append({"link": l, "final": final, "flags": f})
+        date = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+        posts.append({"id": pid, "archived": f"https://web.archive.org/web/{ts}/{orig}", "captured": date,
+                      "text": text[:280], "links": [link_cache.get(l, (l,))[0] for l in links],
+                      "discloses_sponsor": bool(SPONSOR_WORDS.search(text)), "flagged_links": flagged})
+    # Destinations promoted again and again are a coordination signal worth a human look
+    dest_count = {}
+    for p in posts:
+        for d in set(p["links"]):
+            host = urlparse(d).netloc.lower()
+            if host and not any(x in host for x in ("x.com", "twitter.com", "twimg")):
+                dest_count[host] = dest_count.get(host, 0) + 1
+    top = sorted(dest_count.items(), key=lambda x: -x[1])[:10]
+    return {"archived_posts": len(uniq), "attempted": min(len(uniq), limit), "readable": readable,
+            "posts": posts, "top_destinations": top}
 
 
 def check_wayback(handle):
@@ -379,6 +446,7 @@ def run(query, name=None):
         rep["sections"]["YouTube"] = safe("YouTube", check_youtube, handle)
         rep["sections"]["X threads (Thread Reader App copies)"] = safe("Thread Reader", check_threadreader, handle)
         rep["sections"]["Archived posts (Wayback Machine)"] = safe("Wayback", check_wayback, handle)
+        rep["sections"]["Archived X posts read for tracked links"] = safe("Archived X posts", check_archived_posts, handle)
     for n in names:
         rep["sections"][f"FARA foreign agent records for \"{n}\""] = safe("FARA", check_fara, n)
         rep["sections"][f"FEC campaign payments to \"{n}\""] = safe("FEC", check_fec, n)
@@ -418,6 +486,8 @@ def to_markdown(rep):
                 for l in flagged:
                     L.append(f"- {l['link']} → {l['final']}  \n  {'; '.join(l['flags'])}")
             L.append("")
+        elif title == "YouTube" and not data.get("channel"):
+            L += ["No YouTube channel under this handle.", ""]
         elif title == "YouTube":
             L.append(f"Channel: {data['channel']}. Recent videos with sponsor language or tracked links: {len(data['videos'])}")
             for cl in data.get("channel_links", []):
@@ -438,6 +508,20 @@ def to_markdown(rep):
                     L.append(f"- {t['date']} [{t['title']}]({t['url']}) ([original]({t['original']})): {disc}")
                     for f in t["flagged_links"]:
                         L.append(f"  - {f['link']} → {f['final']} ({'; '.join(f['flags'])})")
+            L.append("")
+        elif title.startswith("Archived X posts"):
+            fl = [p for p in data["posts"] if p["flagged_links"]]
+            sp = [p for p in data["posts"] if p["discloses_sponsor"]]
+            L.append(f"{data['archived_posts']} posts archived; read {data['attempted']} newest, "
+                     f"{data['readable']} had readable text. Posts with tracked, affiliate or funding links: {len(fl)}. "
+                     f"Posts with sponsor language: {len(sp)}.")
+            if data["top_destinations"]:
+                L.append("Most-linked outside sites: " + ", ".join(f"{h} ({n})" for h, n in data["top_destinations"]))
+            for p in fl:
+                disc = "sponsor language present" if p["discloses_sponsor"] else "**no sponsor disclosure in text**"
+                L.append(f"- {p['captured']} [archived post]({p['archived']}): {disc}  \n  \"{p['text'][:160]}\"")
+                for f in p["flagged_links"]:
+                    L.append(f"  - {f['link']} → {f['final']} ({'; '.join(f['flags'])})")
             L.append("")
         elif title.startswith("Archived posts"):
             for a in data:
