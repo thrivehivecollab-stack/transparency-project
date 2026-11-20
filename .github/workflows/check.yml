@@ -1,0 +1,46 @@
+name: Check a handle or name (test)
+
+# Results are NOT printed to the public log. The report is saved as a private-ish
+# artifact kept for 1 day so the reviewer can read it before anything is shared.
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: "Handle (with or without @) or full name"
+        required: true
+      name:
+        description: "Optional public business or brand name to also check"
+        required: false
+      label:
+        description: "Short label for the report file"
+        required: false
+        default: "report"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run checks (output kept out of the log)
+        env:
+          FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+          Q: ${{ inputs.query }}
+          N: ${{ inputs.name }}
+          L: ${{ inputs.label }}
+        run: |
+          cd lookup
+          if [ -n "$N" ]; then python check.py --query "$Q" --name "$N" --out "$L" >/dev/null 2>&1; else python check.py --query "$Q" --out "$L" >/dev/null 2>&1; fi
+          echo "finished with exit code $?"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.label }}
+          path: lookup/${{ inputs.label }}.*
+          retention-days: 1
