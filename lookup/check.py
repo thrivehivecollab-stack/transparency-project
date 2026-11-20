@@ -30,9 +30,10 @@ S.headers["User-Agent"] = "TransparencyProject-Check/1.0 (public-interest resear
 TIMEOUT = 40
 ERRORS = []  # sources that could not be checked, so "nothing found" is never reported for a failed source
 
-TRACKING_PARAMS = {"utm_campaign", "utm_source", "utm_medium", "utm_content", "ref", "aff", "aff_id", "affiliate",
-                   "affid", "creator", "creator_id", "cid", "campaign", "campaign_id", "irclickid", "subid", "sub_id",
-                   "clickid", "tag", "partner", "promo", "code", "src"}
+# Only codes that identify WHO gets credit or paid count as a signal. Ordinary utm_* share tags are
+# added by news sites and social tools to everything they post, so they are never treated as a paid signal.
+TRACKING_PARAMS = {"ref", "aff", "aff_id", "affiliate", "affid", "creator", "creator_id", "creator_code",
+                   "irclickid", "subid", "sub_id", "clickid", "partner", "promo", "code", "influencer", "kol"}
 AFFILIATE_HOSTS = ["amzn.to", "skimresources", "shareasale", "sjv.io", "pxf.io", "rstyle.me", "liketk.it",
                    "geni.us", "go.magik.ly", "howl.me", "awin1.com", "anrdoezrs", "dpbolvw", "jdoqocy", "tkqlhce",
                    "impact.com", "partnerize", "linksynergy", "mavely", "shopmy"]
@@ -104,8 +105,10 @@ def flag_link(hops):
                 reasons.append(f"self-declared funding channel: {label}")
         params = {k.lower(): v for k, v in parse_qsl(u.query)}
         hit = sorted(set(params) & TRACKING_PARAMS)
+        if "tag" in params and "amazon." in host:
+            hit.append("tag")
         if hit:
-            reasons.append("tracking codes: " + ", ".join(f"{k}={params[k][:40]}" for k in hit))
+            reasons.append("creator/affiliate codes: " + ", ".join(f"{k}={params[k][:40]}" for k in hit))
     return sorted(set(reasons))
 
 
@@ -274,7 +277,8 @@ def check_archived_posts(handle, limit=150):
             if f:
                 flagged.append({"link": l, "final": final, "flags": f})
         date = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
-        posts.append({"id": pid, "archived": f"https://web.archive.org/web/{ts}/{orig}", "captured": date,
+        is_reply = text.lstrip().startswith("@")
+        posts.append({"id": pid, "archived": f"https://web.archive.org/web/{ts}/{orig}", "captured": date, "reply": is_reply,
                       "text": text[:280], "links": [link_cache.get(l, (l,))[0] for l in links],
                       "discloses_sponsor": bool(SPONSOR_WORDS.search(text)), "flagged_links": flagged})
     # Destinations promoted again and again are a coordination signal worth a human look
@@ -519,7 +523,8 @@ def to_markdown(rep):
                 L.append("Most-linked outside sites: " + ", ".join(f"{h} ({n})" for h, n in data["top_destinations"]))
             for p in fl:
                 disc = "sponsor language present" if p["discloses_sponsor"] else "**no sponsor disclosure in text**"
-                L.append(f"- {p['captured']} [archived post]({p['archived']}): {disc}  \n  \"{p['text'][:160]}\"")
+                note = " (reply: the link may belong to the post being replied to)" if p.get("reply") else ""
+                L.append(f"- {p['captured']} [archived post]({p['archived']}): {disc}{note}  \n  \"{p['text'][:160]}\"")
                 for f in p["flagged_links"]:
                     L.append(f"  - {f['link']} → {f['final']} ({'; '.join(f['flags'])})")
             L.append("")
