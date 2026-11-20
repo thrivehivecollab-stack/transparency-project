@@ -37,9 +37,11 @@ jobs:
           L: ${{ inputs.label }}
         run: |
           cd lookup
-          if [ -n "$N" ]; then python check.py --query "$Q" --name "$N" --out "$L" >/dev/null 2>&1; else python check.py --query "$Q" --out "$L" >/dev/null 2>&1; fi
+          set +e
+          if [ -n "$N" ]; then python check.py --query "$Q" --name "$N" --out "$L" > "$L.log" 2>&1; else python check.py --query "$Q" --out "$L" > "$L.log" 2>&1; fi
           echo "finished with exit code $?"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ${{ inputs.label }}
           path: lookup/${{ inputs.label }}.*

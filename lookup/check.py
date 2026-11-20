@@ -301,22 +301,30 @@ def check_nonprofits(name):
 
 
 # ---------------------------------------------------------------- report
+def safe(label, fn, *args):
+    try:
+        return fn(*args)
+    except Exception as e:  # one broken source must never sink the whole report
+        ERRORS.append(f"{label} check crashed: {type(e).__name__}: {str(e)[:150]}")
+        return None
+
+
 def run(query, name=None):
     q = query.strip()
     handle = q.lstrip("@") if (q.startswith("@") or " " not in q) else None
-    names = [n for n in {name, None if handle else q} if n]
+    names = [n for n in dict.fromkeys([name, None if handle else q]) if n]
     rep = {"query": q, "handle": handle, "names": names,
            "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "sections": {}}
     if handle:
-        rep["sections"]["Link-in-bio pages"] = check_link_in_bio(handle)
-        rep["sections"]["YouTube"] = check_youtube(handle)
-        rep["sections"]["Archived posts (Wayback Machine)"] = check_wayback(handle)
+        rep["sections"]["Link-in-bio pages"] = safe("Link-in-bio", check_link_in_bio, handle)
+        rep["sections"]["YouTube"] = safe("YouTube", check_youtube, handle)
+        rep["sections"]["Archived posts (Wayback Machine)"] = safe("Wayback", check_wayback, handle)
     for n in names:
-        rep["sections"][f"FARA foreign agent records for \"{n}\""] = check_fara(n)
-        rep["sections"][f"FEC campaign payments to \"{n}\""] = check_fec(n)
-        rep["sections"][f"Lobbying disclosures naming \"{n}\""] = check_lda(n)
-        rep["sections"][f"Federal contracts and grants to \"{n}\""] = check_usaspending(n)
-        rep["sections"][f"Nonprofits named \"{n}\""] = check_nonprofits(n)
+        rep["sections"][f"FARA foreign agent records for \"{n}\""] = safe("FARA", check_fara, n)
+        rep["sections"][f"FEC campaign payments to \"{n}\""] = safe("FEC", check_fec, n)
+        rep["sections"][f"Lobbying disclosures naming \"{n}\""] = safe("Lobbying", check_lda, n)
+        rep["sections"][f"Federal contracts and grants to \"{n}\""] = safe("USAspending", check_usaspending, n)
+        rep["sections"][f"Nonprofits named \"{n}\""] = safe("Nonprofits", check_nonprofits, n)
     rep["could_not_check"] = sorted(set(ERRORS))
     return rep
 
@@ -388,5 +396,9 @@ if __name__ == "__main__":
     a = ap.parse_args()
     rep = run(a.query, a.name)
     Path(f"{a.out}.json").write_text(json.dumps(rep, indent=1, default=str))
-    Path(f"{a.out}.md").write_text(to_markdown(rep))
+    try:
+        md = to_markdown(rep)
+    except Exception as e:
+        md = f"# Check: {rep['query']}\n\nReport formatting failed ({e}). Raw data is in the .json file."
+    Path(f"{a.out}.md").write_text(md)
     print(f"wrote {a.out}.md and {a.out}.json")
