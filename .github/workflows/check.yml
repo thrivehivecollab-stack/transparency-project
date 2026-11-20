@@ -40,9 +40,12 @@ jobs:
           set +e
           if [ -n "$N" ]; then python check.py --query "$Q" --name "$N" --out "$L" > "$L.log" 2>&1; else python check.py --query "$Q" --out "$L" > "$L.log" 2>&1; fi
           echo "finished with exit code $?"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ${{ inputs.label }}
-          path: lookup/${{ inputs.label }}.*
-          retention-days: 1
+          # Encrypt the report so the public log only ever shows scrambled text
+          cat "$L.md" "$L.log" > bundle.txt 2>/dev/null || true
+          openssl rand -hex 32 > k.txt
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in bundle.txt -out bundle.enc -pass file:k.txt
+          openssl pkeyutl -encrypt -pubin -inkey report_key.pub -in k.txt -out k.enc
+          echo "===KEY===";  base64 -w0 k.enc; echo
+          echo "===DATA==="; base64 -w0 bundle.enc; echo
+          echo "===END==="
+          rm -f k.txt bundle.txt
