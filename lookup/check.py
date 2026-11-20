@@ -187,6 +187,41 @@ def check_youtube(handle):
     return {"channel": f"https://www.youtube.com/channel/{cid}", "channel_links": about_links, "videos": videos}
 
 
+def check_threadreader(handle, max_threads=25):
+    """Thread Reader App keeps public, readable copies of X threads people asked it to unroll."""
+    import time
+    r = get(f"https://threadreaderapp.com/user/{handle}")
+    if not r or r.status_code != 200:
+        return None if (r is None or r.status_code != 404) else []
+    ids = list(dict.fromkeys(re.findall(r'/thread/(\d{8,25})', r.text)))[:max_threads]
+    threads = []
+    for tid in ids:
+        time.sleep(2)  # be polite
+        t = get(f"https://threadreaderapp.com/thread/{tid}.html")
+        if not t or t.status_code != 200:
+            continue
+        body = re.sub(r"<script.*?</script>|<style.*?</style>", " ", t.text, flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", body)
+        title = re.search(r"<title>(.*?)</title>", t.text, re.S)
+        date_m = re.search(r'datetime="([0-9-]{10})', t.text)
+        links = [l for l in extract_links(body, ["threadreaderapp", "twitter.com", "x.com", "twimg", "googletag",
+                                                  "google-analytics", "gstatic", "cloudflare", "fonts.", "schema.org",
+                                                  "w3.org", "facebook.com/tr", "doubleclick"])][:20]
+        flagged = []
+        for l in links:
+            hops = trace(l)
+            f = flag_link(hops)
+            if f:
+                flagged.append({"link": l, "final": hops[-1], "flags": f})
+        threads.append({"url": f"https://threadreaderapp.com/thread/{tid}.html",
+                        "original": f"https://x.com/{handle}/status/{tid}",
+                        "title": (title.group(1).strip()[:120] if title else ""),
+                        "date": date_m.group(1) if date_m else "",
+                        "links_found": len(links), "flagged_links": flagged,
+                        "discloses_sponsor": bool(SPONSOR_WORDS.search(text))})
+    return threads
+
+
 def check_wayback(handle):
     out = []
     for label, pattern in [("X/Twitter posts", f"x.com/{handle}/status/*"),
@@ -342,6 +377,7 @@ def run(query, name=None):
     if handle:
         rep["sections"]["Link-in-bio pages"] = safe("Link-in-bio", check_link_in_bio, handle)
         rep["sections"]["YouTube"] = safe("YouTube", check_youtube, handle)
+        rep["sections"]["X threads (Thread Reader App copies)"] = safe("Thread Reader", check_threadreader, handle)
         rep["sections"]["Archived posts (Wayback Machine)"] = safe("Wayback", check_wayback, handle)
     for n in names:
         rep["sections"][f"FARA foreign agent records for \"{n}\""] = safe("FARA", check_fara, n)
@@ -391,6 +427,17 @@ def to_markdown(rep):
                 L.append(f"- {v['published']} [{v['title']}]({v['url']}): {disc}")
                 for f in v["flagged_links"]:
                     L.append(f"  - {f['link']} → {f['final']} ({'; '.join(f['flags'])})")
+            L.append("")
+        elif title.startswith("X threads"):
+            nflag = sum(1 for t in data if t["flagged_links"])
+            L.append(f"{len(data)} unrolled threads read, {sum(t['links_found'] for t in data)} outside links traced, "
+                     f"{nflag} threads with tracked, affiliate or funding links.")
+            for t in data:
+                if t["flagged_links"] or t["discloses_sponsor"]:
+                    disc = "sponsor language present" if t["discloses_sponsor"] else "**no sponsor disclosure in text**"
+                    L.append(f"- {t['date']} [{t['title']}]({t['url']}) ([original]({t['original']})): {disc}")
+                    for f in t["flagged_links"]:
+                        L.append(f"  - {f['link']} → {f['final']} ({'; '.join(f['flags'])})")
             L.append("")
         elif title.startswith("Archived posts"):
             for a in data:
