@@ -36,6 +36,11 @@ TRACKING_PARAMS = {"utm_campaign", "utm_source", "utm_medium", "utm_content", "r
 AFFILIATE_HOSTS = ["amzn.to", "skimresources", "shareasale", "sjv.io", "pxf.io", "rstyle.me", "liketk.it",
                    "geni.us", "go.magik.ly", "howl.me", "awin1.com", "anrdoezrs", "dpbolvw", "jdoqocy", "tkqlhce",
                    "impact.com", "partnerize", "linksynergy", "mavely", "shopmy"]
+FUNDING_HOSTS = {"buymeacoffee.com": "Buy Me a Coffee", "patreon.com": "Patreon", "ko-fi.com": "Ko-fi",
+                 "substack.com": "Substack", "locals.com": "Locals", "givesendgo.com": "GiveSendGo",
+                 "gofundme.com": "GoFundMe", "cash.app": "Cash App", "venmo.com": "Venmo", "paypal.me": "PayPal",
+                 "subscribestar.com": "SubscribeStar", "rumble.com": "Rumble", "streamlabs.com": "Streamlabs",
+                 "x.com/i/subscriptions": "X subscriptions"}
 SHORTENERS = ["bit.ly", "t.co", "tinyurl.com", "ow.ly", "buff.ly", "rebrand.ly", "shorturl.at", "lnkd.in"]
 SPONSOR_WORDS = re.compile(r"#ad\b|#sponsored|paid partnership|sponsored by|in partnership with|use (my )?code|#partner\b",
                            re.I)
@@ -70,7 +75,7 @@ def trace(url, max_hops=8):
         try:
             r = S.get(cur, allow_redirects=False, timeout=20, stream=True)
             r.close()
-        except requests.RequestException:
+        except (requests.RequestException, ValueError):
             break
         if r.is_redirect and r.headers.get("Location"):
             cur = urljoin(cur, r.headers["Location"])
@@ -84,12 +89,19 @@ def flag_link(hops):
     """Return reasons a link chain looks like paid or tracked promotion."""
     reasons = []
     for h in hops:
-        u = urlparse(h)
+        try:
+            u = urlparse(h)
+            u.netloc.lower()
+        except ValueError:
+            continue
         host = u.netloc.lower()
         if any(d in host for d in WATCH.get("redirect_domains", [])):
             reasons.append(f"routes through watchlisted campaign domain {host}")
         if any(a in host for a in AFFILIATE_HOSTS):
             reasons.append(f"affiliate network ({host})")
+        for fh, label in FUNDING_HOSTS.items():
+            if fh in (host + u.path).lower():
+                reasons.append(f"self-declared funding channel: {label}")
         params = {k.lower(): v for k, v in parse_qsl(u.query)}
         hit = sorted(set(params) & TRACKING_PARAMS)
         if hit:
@@ -102,7 +114,10 @@ def extract_links(html, skip_hosts=()):
     out = []
     for l in links:
         l = l.rstrip(").,;")
-        host = urlparse(l).netloc.lower()
+        try:
+            host = urlparse(l).netloc.lower()
+        except ValueError:
+            continue
         if not host or any(s in host for s in skip_hosts):
             continue
         if re.search(r"\.(png|jpe?g|gif|svg|webp|css|js|woff2?|ico)(\?|$)", l):
@@ -141,9 +156,15 @@ def check_youtube(handle):
     if not m:
         return None
     cid = m.group(1)
+    about_links = []
+    for l in extract_links(r.text.replace("\\u0026", "&"), ["youtube.com", "youtu.be", "ytimg", "ggpht",
+                                                           "googlevideo", "google.com", "gstatic", "doubleclick"])[:40]:
+        f = flag_link([l])
+        if f:
+            about_links.append({"link": l, "flags": f})
     feed = get(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}")
     if not feed or feed.status_code != 200:
-        return {"channel": f"https://www.youtube.com/channel/{cid}", "videos": []}
+        return {"channel": f"https://www.youtube.com/channel/{cid}", "channel_links": about_links, "videos": []}
     videos = []
     for entry in re.findall(r"<entry>(.*?)</entry>", feed.text, re.S):
         title = re.search(r"<title>(.*?)</title>", entry, re.S)
@@ -163,7 +184,7 @@ def check_youtube(handle):
             videos.append({"title": title.group(1) if title else "", "url": link.group(1) if link else "",
                            "published": published.group(1)[:10] if published else "",
                            "discloses_sponsor": sponsor_text, "flagged_links": flagged})
-    return {"channel": f"https://www.youtube.com/channel/{cid}", "videos": videos}
+    return {"channel": f"https://www.youtube.com/channel/{cid}", "channel_links": about_links, "videos": videos}
 
 
 def check_wayback(handle):
@@ -229,7 +250,8 @@ def check_fara(name):
               "foreign_principals": "Foreign principals (who the agents work for)"}
     regs = set()
     for kind, label in labels.items():
-        hits = [row for row in fara_rows(kind) if name_matches(" ".join(v or "" for v in row.values()), toks)]
+        hits = [{k: v for k, v in row.items() if k} for row in fara_rows(kind)
+                if name_matches(" ".join(str(v) for k, v in row.items() if k and v), toks)]
         if hits:
             result[label] = hits[:25]
             regs.update(filter(None, (reg_number(h) for h in hits)))
@@ -345,6 +367,9 @@ def to_markdown(rep):
              [f"- {e}" for e in rep["could_not_check"]] + [""]
     for title, data in rep["sections"].items():
         L.append(f"## {title}")
+        if data is None:
+            L += ["**Could not check.** See the list at the top. This is unknown, not clean.", ""]
+            continue
         if not data:
             L += ["Nothing found.", ""]
             continue
@@ -357,6 +382,8 @@ def to_markdown(rep):
             L.append("")
         elif title == "YouTube":
             L.append(f"Channel: {data['channel']}. Recent videos with sponsor language or tracked links: {len(data['videos'])}")
+            for cl in data.get("channel_links", []):
+                L.append(f"- Channel page link: {cl['link']} ({'; '.join(cl['flags'])})")
             for v in data["videos"]:
                 disc = "discloses a sponsor" if v["discloses_sponsor"] else "**no sponsor disclosure found in description**"
                 L.append(f"- {v['published']} [{v['title']}]({v['url']}): {disc}")
